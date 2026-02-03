@@ -2,6 +2,9 @@
 
 A real-time mouse tracking system that captures mouse coordinates, sends them through Kafka, and displays them as dots on a web page.
 
+## Result
+![Result in UI](/assets/result.gif)
+
 ## Architecture
 
 ```

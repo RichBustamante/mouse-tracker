@@ -13,11 +13,12 @@ app.use(express.static(__dirname));
 // Kafka configuration
 const kafka = new Kafka({
     clientId: 'mouse-tracker',
-    brokers: ['localhost:9092']
+    brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
 });
 
 const producer = kafka.producer();
 const consumer = kafka.consumer({ groupId: 'mouse-tracker-group' });
+const admin = kafka.admin();
 
 // WebSocket servers
 const producerWss = new WebSocket.Server({ noServer: true });
@@ -26,32 +27,85 @@ const consumerWss = new WebSocket.Server({ noServer: true });
 // Store consumer WebSocket clients
 const consumerClients = new Set();
 
+// Create topic if it doesn't exist
+async function createTopic() {
+    try {
+        await admin.connect();
+        const topics = await admin.listTopics();
+        
+        if (!topics.includes('mouse-coordinates')) {
+            console.log('Creating topic: mouse-coordinates');
+            await admin.createTopics({
+                topics: [{
+                    topic: 'mouse-coordinates',
+                    numPartitions: 3,
+                    replicationFactor: 1
+                }]
+            });
+            console.log('Topic created successfully');
+        } else {
+            console.log('Topic already exists');
+        }
+        
+        await admin.disconnect();
+    } catch (error) {
+        console.error('Error creating topic:', error.message);
+        try {
+            await admin.disconnect();
+        } catch (e) {
+            // Ignore disconnect errors
+        }
+    }
+}
+
 // Initialize Kafka producer
 async function initProducer() {
-    await producer.connect();
-    console.log('Kafka producer connected');
+    let retries = 5;
+    while (retries > 0) {
+        try {
+            await producer.connect();
+            console.log('Kafka producer connected');
+            return;
+        } catch (error) {
+            retries--;
+            console.log(`Failed to connect producer, retries left: ${retries}`);
+            if (retries === 0) throw error;
+            await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+    }
 }
 
 // Initialize Kafka consumer
 async function initConsumer() {
-    await consumer.connect();
-    await consumer.subscribe({ topic: 'mouse-coordinates', fromBeginning: false });
-    
-    await consumer.run({
-        eachMessage: async ({ topic, partition, message }) => {
-            const data = JSON.parse(message.value.toString());
-            console.log('Received from Kafka:', data);
+    let retries = 5;
+    while (retries > 0) {
+        try {
+            await consumer.connect();
+            await consumer.subscribe({ topic: 'mouse-coordinates', fromBeginning: false });
             
-            // Broadcast to all consumer WebSocket clients
-            consumerClients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify(data));
+            await consumer.run({
+                eachMessage: async ({ topic, partition, message }) => {
+                    const data = JSON.parse(message.value.toString());
+                    console.log('Received from Kafka:', data);
+                    
+                    // Broadcast to all consumer WebSocket clients
+                    consumerClients.forEach(client => {
+                        if (client.readyState === WebSocket.OPEN) {
+                            client.send(JSON.stringify(data));
+                        }
+                    });
                 }
             });
+            
+            console.log('Kafka consumer connected and listening');
+            return;
+        } catch (error) {
+            retries--;
+            console.log(`Failed to connect consumer, retries left: ${retries}`);
+            if (retries === 0) throw error;
+            await new Promise(resolve => setTimeout(resolve, 3000));
         }
-    });
-    
-    console.log('Kafka consumer connected and listening');
+    }
 }
 
 // Handle producer WebSocket connections (receives mouse coords from browser)
@@ -123,12 +177,17 @@ server.on('upgrade', (request, socket, head) => {
 // Initialize and start server
 async function start() {
     try {
+        // Wait a bit for Kafka to be fully ready
+        console.log('Waiting for Kafka to be ready...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        await createTopic();
         await initProducer();
         await initConsumer();
         
-        const PORT = 8080;
+        const PORT = process.env.PORT || 8080;
         server.listen(PORT, () => {
-            console.log(`Server running on http://localhost:${PORT}`);
+            console.log(`Server running on port ${PORT}`);
             console.log('WebSocket endpoints:');
             console.log('  - Producer: ws://localhost:8080/producer');
             console.log('  - Consumer: ws://localhost:8080/consumer');
