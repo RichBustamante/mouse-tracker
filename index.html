@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mouse Tracker</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            cursor: crosshair;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 1000;
+        }
+        .status {
+            margin: 5px 0;
+        }
+        .connected {
+            color: #4CAF50;
+        }
+        .disconnected {
+            color: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="info">
+        <div class="status">Producer WS: <span id="producerStatus" class="disconnected">Disconnected</span></div>
+        <div class="status">Consumer WS: <span id="consumerStatus" class="disconnected">Disconnected</span></div>
+        <div class="status">Mouse: <span id="mouseCoords">0, 0</span></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // WebSocket connections
+        let producerWs = null;
+        let consumerWs = null;
+
+        // Status elements
+        const producerStatus = document.getElementById('producerStatus');
+        const consumerStatus = document.getElementById('consumerStatus');
+        const mouseCoords = document.getElementById('mouseCoords');
+
+        // Connect to producer WebSocket (sends mouse coordinates)
+        function connectProducer() {
+            producerWs = new WebSocket('ws://localhost:8080/producer');
+            
+            producerWs.onopen = () => {
+                producerStatus.textContent = 'Connected';
+                producerStatus.className = 'connected';
+                console.log('Producer WebSocket connected');
+            };
+            
+            producerWs.onclose = () => {
+                producerStatus.textContent = 'Disconnected';
+                producerStatus.className = 'disconnected';
+                console.log('Producer WebSocket disconnected');
+                setTimeout(connectProducer, 3000);
+            };
+            
+            producerWs.onerror = (error) => {
+                console.error('Producer WebSocket error:', error);
+            };
+        }
+
+        // Connect to consumer WebSocket (receives mouse coordinates)
+        function connectConsumer() {
+            consumerWs = new WebSocket('ws://localhost:8080/consumer');
+            
+            consumerWs.onopen = () => {
+                consumerStatus.textContent = 'Connected';
+                consumerStatus.className = 'connected';
+                console.log('Consumer WebSocket connected');
+            };
+            
+            consumerWs.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                drawDot(data.x, data.y);
+            };
+            
+            consumerWs.onclose = () => {
+                consumerStatus.textContent = 'Disconnected';
+                consumerStatus.className = 'disconnected';
+                console.log('Consumer WebSocket disconnected');
+                setTimeout(connectConsumer, 3000);
+            };
+            
+            consumerWs.onerror = (error) => {
+                console.error('Consumer WebSocket error:', error);
+            };
+        }
+
+        // Draw a dot at the specified coordinates
+        function drawDot(x, y) {
+            ctx.fillStyle = '#2196F3';
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+
+        // Capture mouse movement
+        canvas.addEventListener('mousemove', (event) => {
+            const x = event.clientX;
+            const y = event.clientY;
+            
+            mouseCoords.textContent = `${x}, ${y}`;
+            
+            if (producerWs && producerWs.readyState === WebSocket.OPEN) {
+                producerWs.send(JSON.stringify({ x, y, timestamp: Date.now() }));
+            }
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Initialize connections
+        connectProducer();
+        connectConsumer();
+    </script>
+</body>
+</html>
